@@ -8,6 +8,7 @@ checking quantization api and properties of resulting modules.
 """
 
 import hypothesis
+import io
 import torch
 import torch.nn.quantized as nnq
 from common_utils import TestCase
@@ -120,6 +121,18 @@ class QuantizationTestCase(TestCase):
         assert not ((ref_inputs is None) ^ (ref_outputs is None)), 'Both or neither' \
             'of ref_inputs and ref_outputs must be specified'
         scripted = torch.jit.script(mod)
+        self._checkScriptable(scripted)
+
+    # Call this twice: once for a scripted module and once for a traced module
+    def _checkScriptable(self, script_mod, ref_inputs=None, ref_outputs=None):
+        # Test save/load
+        #
+        # TODO: need __get_state__ and __set_state__
+        buffer = io.BytesIO()
+        torch.jit.save(script_mod, buffer)
+
+        buffer.seek(0)
+        torch.jit.load(buffer)
 
         if ref_inputs is not None:
             self.assertEqual(scripted(*ref_inputs), ref_outputs)
