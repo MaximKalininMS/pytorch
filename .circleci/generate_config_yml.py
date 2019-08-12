@@ -83,8 +83,23 @@ YAML_SOURCES = [
     Header("Job specifications job specs"),
     Treegen(pytorch_build_definitions.add_build_env_defs, 0),
     File("job-specs-setup.yml"),
+    File("job-specs-custom.yml"),
     Treegen(caffe2_build_definitions.add_caffe2_builds, 1),
+    File("binary_update_htmls.yml"),
+    Header("Binary build specs individual job specifications"),
     Treegen(binary_build_definitions.add_binary_build_specs, 1),
+    Header(
+        "Binary build tests", [
+            "These are the smoke tests run right after the build, before the upload.",
+            "If these fail, the upload doesn't happen."
+        ]
+    ),
+    Treegen(binary_build_definitions.add_binary_build_tests, 1),
+    File("binary-build-tests.yml"),
+    Header("Binary build uploads"),
+    Treegen(binary_build_definitions.add_binary_build_uploads, 1),
+    Header("Smoke test specs individual job specifications"),
+    Treegen(binary_build_definitions.add_smoke_test_specs, 1),
     File("workflows.yml"),
     Listgen(caffe2_build_definitions.get_caffe2_workflows, 3),
 ]

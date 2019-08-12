@@ -1017,6 +1017,273 @@ jobs:
           root: .
           paths: .circleci/scripts
 
+  pytorch_short_perf_test_gpu:
+    environment:
+      BUILD_ENVIRONMENT: pytorch-short-perf-test-gpu
+      DOCKER_IMAGE: "308535385114.dkr.ecr.us-east-1.amazonaws.com/pytorch/pytorch-linux-xenial-cuda9-cudnn7-py3:327"
+      PYTHON_VERSION: "3.6"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    machine:
+      image: ubuntu-1604:201903-01
+    steps:
+    # See Note [Workspace for CircleCI scripts] in job-specs-setup.yml
+    - attach_workspace:
+        at: ~/workspace
+    - run:
+        <<: *should_run_job
+    - run:
+        <<: *setup_linux_system_environment
+    - run:
+        <<: *setup_ci_environment
+    - run:
+        name: Perf Test
+        no_output_timeout: "1h"
+        command: |
+          set -e
+          export COMMIT_DOCKER_IMAGE=${DOCKER_IMAGE}-${CIRCLE_SHA1}
+          echo "DOCKER_IMAGE: "${COMMIT_DOCKER_IMAGE}
+          docker pull ${COMMIT_DOCKER_IMAGE} >/dev/null
+          export id=$(docker run --runtime=nvidia -t -d -w /var/lib/jenkins ${COMMIT_DOCKER_IMAGE})
+
+          docker cp $id:/var/lib/jenkins/workspace/env /home/circleci/project/env
+          # This IAM user allows write access to S3 bucket for perf test numbers
+          set +x
+          echo "declare -x AWS_ACCESS_KEY_ID=${CIRCLECI_AWS_ACCESS_KEY_FOR_PERF_TEST_S3_BUCKET_V4}" >> /home/circleci/project/env
+          echo "declare -x AWS_SECRET_ACCESS_KEY=${CIRCLECI_AWS_SECRET_KEY_FOR_PERF_TEST_S3_BUCKET_V4}" >> /home/circleci/project/env
+          set -x
+          docker cp /home/circleci/project/env $id:/var/lib/jenkins/workspace/env
+
+          export COMMAND='((echo "export BUILD_ENVIRONMENT=${BUILD_ENVIRONMENT}" && echo "source ./workspace/env" && echo "sudo chown -R jenkins workspace && cd workspace && .jenkins/pytorch/short-perf-test-gpu.sh") | docker exec -u jenkins -i "$id" bash) 2>&1'
+          echo ${COMMAND} > ./command.sh && unbuffer bash ./command.sh | ts
+
+  pytorch_python_doc_push:
+    environment:
+      BUILD_ENVIRONMENT: pytorch-python-doc-push
+      # TODO: stop hardcoding this
+      DOCKER_IMAGE: "308535385114.dkr.ecr.us-east-1.amazonaws.com/pytorch/pytorch-linux-xenial-cuda9-cudnn7-py3:327"
+    resource_class: large
+    machine:
+      image: ubuntu-1604:201903-01
+    steps:
+    # See Note [Workspace for CircleCI scripts] in job-specs-setup.yml
+    - attach_workspace:
+        at: ~/workspace
+    - run:
+        <<: *should_run_job
+    - run:
+        <<: *setup_linux_system_environment
+    - run:
+        <<: *setup_ci_environment
+    - run:
+        name: Doc Build and Push
+        no_output_timeout: "1h"
+        command: |
+          set -ex
+          export COMMIT_DOCKER_IMAGE=${DOCKER_IMAGE}-${CIRCLE_SHA1}
+          echo "DOCKER_IMAGE: "${COMMIT_DOCKER_IMAGE}
+          docker pull ${COMMIT_DOCKER_IMAGE} >/dev/null
+          export id=$(docker run -t -d -w /var/lib/jenkins ${COMMIT_DOCKER_IMAGE})
+
+          # master branch docs push
+          if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+            export COMMAND='((echo "export BUILD_ENVIRONMENT=${BUILD_ENVIRONMENT}" && echo "export GITHUB_PYTORCHBOT_TOKEN=${GITHUB_PYTORCHBOT_TOKEN}" && echo "source ./workspace/env" && echo "sudo chown -R jenkins workspace && cd workspace && . ./.circleci/scripts/python_doc_push_script.sh docs/master master site") | docker exec -u jenkins -i "$id" bash) 2>&1'
+
+          # stable release docs push. Due to some circleci limitations, we keep
+          # an eternal PR open for merging v1.2.0 -> master for this job.
+          # XXX: The following code is only run on the v1.2.0 branch, which might
+          # not be exactly the same as what you see here.
+          elif [[ "${CIRCLE_BRANCH}" == "v1.2.0" ]]; then
+            export COMMAND='((echo "export BUILD_ENVIRONMENT=${BUILD_ENVIRONMENT}" && echo "export GITHUB_PYTORCHBOT_TOKEN=${GITHUB_PYTORCHBOT_TOKEN}" && echo "source ./workspace/env" && echo "sudo chown -R jenkins workspace && cd workspace && . ./.circleci/scripts/python_doc_push_script.sh docs/stable 1.2.0 site dry_run") | docker exec -u jenkins -i "$id" bash) 2>&1'
+
+          # For open PRs: Do a dry_run of the docs build, don't push build
+          else
+            export COMMAND='((echo "export BUILD_ENVIRONMENT=${BUILD_ENVIRONMENT}" && echo "export GITHUB_PYTORCHBOT_TOKEN=${GITHUB_PYTORCHBOT_TOKEN}" && echo "source ./workspace/env" && echo "sudo chown -R jenkins workspace && cd workspace && . ./.circleci/scripts/python_doc_push_script.sh docs/master master site dry_run") | docker exec -u jenkins -i "$id" bash) 2>&1'
+          fi
+
+          echo ${COMMAND} > ./command.sh && unbuffer bash ./command.sh | ts
+
+          # Save the docs build so we can debug any problems
+          export DEBUG_COMMIT_DOCKER_IMAGE=${COMMIT_DOCKER_IMAGE}-debug
+          docker commit "$id" ${DEBUG_COMMIT_DOCKER_IMAGE}
+          docker push ${DEBUG_COMMIT_DOCKER_IMAGE}
+
+  pytorch_cpp_doc_push:
+    environment:
+      BUILD_ENVIRONMENT: pytorch-cpp-doc-push
+      DOCKER_IMAGE: "308535385114.dkr.ecr.us-east-1.amazonaws.com/pytorch/pytorch-linux-xenial-cuda9-cudnn7-py3:327"
+    resource_class: large
+    machine:
+      image: ubuntu-1604:201903-01
+    steps:
+    # See Note [Workspace for CircleCI scripts] in job-specs-setup.yml
+    - attach_workspace:
+        at: ~/workspace
+    - run:
+        <<: *should_run_job
+    - run:
+        <<: *setup_linux_system_environment
+    - run:
+        <<: *setup_ci_environment
+    - run:
+        name: Doc Build and Push
+        no_output_timeout: "1h"
+        command: |
+          set -ex
+          export COMMIT_DOCKER_IMAGE=${DOCKER_IMAGE}-${CIRCLE_SHA1}
+          echo "DOCKER_IMAGE: "${COMMIT_DOCKER_IMAGE}
+          docker pull ${COMMIT_DOCKER_IMAGE} >/dev/null
+          export id=$(docker run -t -d -w /var/lib/jenkins ${COMMIT_DOCKER_IMAGE})
+
+          # master branch docs push
+          if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+            export COMMAND='((echo "export BUILD_ENVIRONMENT=${BUILD_ENVIRONMENT}" && echo "export GITHUB_PYTORCHBOT_TOKEN=${GITHUB_PYTORCHBOT_TOKEN}" && echo "source ./workspace/env" && echo "sudo chown -R jenkins workspace && cd workspace && . ./.circleci/scripts/cpp_doc_push_script.sh docs/master master") | docker exec -u jenkins -i "$id" bash) 2>&1'
+
+          # stable release docs push. Due to some circleci limitations, we keep
+          # an eternal PR open (#16502) for merging v1.0.1 -> master for this job.
+          # XXX: The following code is only run on the v1.0.1 branch, which might
+          # not be exactly the same as what you see here.
+          elif [[ "${CIRCLE_BRANCH}" == "v1.0.1" ]]; then
+            export COMMAND='((echo "export BUILD_ENVIRONMENT=${BUILD_ENVIRONMENT}" && echo "export GITHUB_PYTORCHBOT_TOKEN=${GITHUB_PYTORCHBOT_TOKEN}" && echo "source ./workspace/env" && echo "sudo chown -R jenkins workspace && cd workspace && . ./.circleci/scripts/cpp_doc_push_script.sh docs/stable 1.0.1") | docker exec -u jenkins -i "$id" bash) 2>&1'
+
+          # For open PRs: Do a dry_run of the docs build, don't push build
+          else
+            export COMMAND='((echo "export BUILD_ENVIRONMENT=${BUILD_ENVIRONMENT}" && echo "export GITHUB_PYTORCHBOT_TOKEN=${GITHUB_PYTORCHBOT_TOKEN}" && echo "source ./workspace/env" && echo "sudo chown -R jenkins workspace && cd workspace && . ./.circleci/scripts/cpp_doc_push_script.sh docs/master master dry_run") | docker exec -u jenkins -i "$id" bash) 2>&1'
+          fi
+
+          echo ${COMMAND} > ./command.sh && unbuffer bash ./command.sh | ts
+
+          # Save the docs build so we can debug any problems
+          export DEBUG_COMMIT_DOCKER_IMAGE=${COMMIT_DOCKER_IMAGE}-debug
+          docker commit "$id" ${DEBUG_COMMIT_DOCKER_IMAGE}
+          docker push ${DEBUG_COMMIT_DOCKER_IMAGE}
+
+  pytorch_macos_10_13_py3_build:
+    environment:
+      BUILD_ENVIRONMENT: pytorch-macos-10.13-py3-build
+    macos:
+      xcode: "9.0"
+    steps:
+      # See Note [Workspace for CircleCI scripts] in job-specs-setup.yml
+      - attach_workspace:
+          at: ~/workspace
+      - run:
+          <<: *should_run_job
+      - checkout
+      - run:
+          <<: *macos_brew_update
+      - run:
+          name: Build
+          no_output_timeout: "1h"
+          command: |
+            set -e
+
+            export IN_CIRCLECI=1
+
+            # Install sccache
+            sudo curl https://s3.amazonaws.com/ossci-macos/sccache --output /usr/local/bin/sccache
+            sudo chmod +x /usr/local/bin/sccache
+
+            export SCCACHE_BUCKET=ossci-compiler-cache-circleci-v2
+            # This IAM user allows write access to S3 bucket for sccache
+            set +x
+            export AWS_ACCESS_KEY_ID=${CIRCLECI_AWS_ACCESS_KEY_FOR_SCCACHE_S3_BUCKET_V4}
+            export AWS_SECRET_ACCESS_KEY=${CIRCLECI_AWS_SECRET_KEY_FOR_SCCACHE_S3_BUCKET_V4}
+            set -x
+
+            chmod a+x .jenkins/pytorch/macos-build.sh
+            unbuffer .jenkins/pytorch/macos-build.sh 2>&1 | ts
+
+            mkdir -p /Users/distiller/pytorch-ci-env/workspace
+
+            # copy with -a to preserve relative structure (e.g., symlinks), and be recursive
+            cp -a /Users/distiller/project/. /Users/distiller/pytorch-ci-env/workspace
+      - persist_to_workspace:
+          root: /Users/distiller/pytorch-ci-env
+          paths:
+            - "*"
+
+  pytorch_macos_10_13_py3_test:
+    environment:
+      BUILD_ENVIRONMENT: pytorch-macos-10.13-py3-test
+    macos:
+      xcode: "9.0"
+    steps:
+      # See Note [Workspace for CircleCI scripts] in job-specs-setup.yml
+      # This workspace also carries binaries from the build job
+      - attach_workspace:
+          at: ~/workspace
+      - run:
+          <<: *should_run_job
+      - run:
+          <<: *macos_brew_update
+      - run:
+          name: Test
+          no_output_timeout: "1h"
+          command: |
+            set -e
+            export IN_CIRCLECI=1
+
+            # copy with -a to preserve relative structure (e.g., symlinks), and be recursive
+            # TODO: I'm not sure why we can't just run our job in
+            # ~/workspace and call it a day
+            # NB: Yes, you need workspace twice
+            cp -a ~/workspace/workspace/. /Users/distiller/project
+
+            chmod a+x .jenkins/pytorch/macos-test.sh
+            unbuffer .jenkins/pytorch/macos-test.sh 2>&1 | ts
+
+  pytorch_macos_10_13_cuda9_2_cudnn7_py3_build:
+    environment:
+      BUILD_ENVIRONMENT: pytorch-macos-10.13-cuda9.2-cudnn7-py3-build
+    macos:
+      xcode: "9.0"
+    steps:
+      # See Note [Workspace for CircleCI scripts] in job-specs-setup.yml
+      - attach_workspace:
+          at: ~/workspace
+      - run:
+          <<: *should_run_job
+      - checkout
+      - run:
+          <<: *macos_brew_update
+      - run:
+          name: Build
+          no_output_timeout: "1h"
+          command: |
+            set -e
+
+            export IN_CIRCLECI=1
+
+            # Install CUDA 9.2
+            sudo rm -rf ~/cuda_9.2.64_mac_installer.app || true
+            curl https://s3.amazonaws.com/ossci-macos/cuda_9.2.64_mac_installer.zip -o ~/cuda_9.2.64_mac_installer.zip
+            unzip ~/cuda_9.2.64_mac_installer.zip -d ~/
+            sudo ~/cuda_9.2.64_mac_installer.app/Contents/MacOS/CUDAMacOSXInstaller --accept-eula --no-window
+            sudo cp /usr/local/cuda/lib/libcuda.dylib /Developer/NVIDIA/CUDA-9.2/lib/libcuda.dylib
+            sudo rm -rf /usr/local/cuda || true
+
+            # Install cuDNN 7.1 for CUDA 9.2
+            curl https://s3.amazonaws.com/ossci-macos/cudnn-9.2-osx-x64-v7.1.tgz -o ~/cudnn-9.2-osx-x64-v7.1.tgz
+            rm -rf ~/cudnn-9.2-osx-x64-v7.1 && mkdir ~/cudnn-9.2-osx-x64-v7.1
+            tar -xzvf ~/cudnn-9.2-osx-x64-v7.1.tgz -C ~/cudnn-9.2-osx-x64-v7.1
+            sudo cp ~/cudnn-9.2-osx-x64-v7.1/cuda/include/cudnn.h /Developer/NVIDIA/CUDA-9.2/include/
+            sudo cp ~/cudnn-9.2-osx-x64-v7.1/cuda/lib/libcudnn* /Developer/NVIDIA/CUDA-9.2/lib/
+            sudo chmod a+r /Developer/NVIDIA/CUDA-9.2/include/cudnn.h /Developer/NVIDIA/CUDA-9.2/lib/libcudnn*
+
+            # Install sccache
+            sudo curl https://s3.amazonaws.com/ossci-macos/sccache --output /usr/local/bin/sccache
+            sudo chmod +x /usr/local/bin/sccache
+            export SCCACHE_BUCKET=ossci-compiler-cache-circleci-v2
+            # This IAM user allows write access to S3 bucket for sccache
+            set +x
+            export AWS_ACCESS_KEY_ID=${CIRCLECI_AWS_ACCESS_KEY_FOR_SCCACHE_S3_BUCKET_V4}
+            export AWS_SECRET_ACCESS_KEY=${CIRCLECI_AWS_SECRET_KEY_FOR_SCCACHE_S3_BUCKET_V4}
+            set -x
+
+            git submodule sync && git submodule update -q --init --recursive
+            chmod a+x .jenkins/pytorch/macos-build.sh
+            unbuffer .jenkins/pytorch/macos-build.sh 2>&1 | ts
   caffe2_onnx_py2_gcc5_ubuntu16_04_build:
     environment:
       BUILD_ENVIRONMENT: "caffe2-onnx-py2-gcc5-ubuntu16.04-build"
@@ -1050,6 +1317,107 @@ jobs:
     resource_class: large
     <<: *caffe2_linux_test_defaults
 
+  
+  # update_s3_htmls job
+  # These jobs create html files for every cpu/cu## folder in s3. The html
+  # files just store the names of all the files in that folder (which are
+  # binary files (.whl files)). This is to allow pip installs of the latest
+  # version in a folder without having to know the latest date. Pip has a flag
+  # -f that you can pass an html file listing a bunch of packages, and pip will
+  # then install the one with the most recent version.
+  update_s3_htmls: &update_s3_htmls
+    machine:
+      image: ubuntu-1604:201903-01
+    steps:
+    - attach_workspace:
+        at: ~/workspace
+    - run:
+        <<: *setup_linux_system_environment
+    - run:
+        <<: *binary_checkout
+    # N.B. we do not run binary_populate_env. The only variable we need is
+    # PIP_UPLOAD_FOLDER (which is 'nightly/' for the nightlies and '' for
+    # releases, and sometimes other things for special cases). Instead we
+    # expect PIP_UPLOAD_FOLDER to be passed directly in the env. This is
+    # because, unlike all the other binary jobs, these jobs only get run once,
+    # in a separate workflow. They are not a step in other binary jobs like
+    # build, test, upload.
+    #
+    # You could attach this to every job, or include it in the upload step if
+    # you wanted. You would need to add binary_populate_env in this case to
+    # make sure it has the same upload folder as the job it's attached to. This
+    # function is idempotent, so it won't hurt anything; it's just a little
+    # unnescessary"
+    - run:
+        name: Update s3 htmls
+        no_output_timeout: "1h"
+        command: |
+          set +x
+          echo "declare -x \"AWS_ACCESS_KEY_ID=${PYTORCH_BINARY_AWS_ACCESS_KEY_ID}\"" >> /home/circleci/project/env
+          echo "declare -x \"AWS_SECRET_ACCESS_KEY=${PYTORCH_BINARY_AWS_SECRET_ACCESS_KEY}\"" >> /home/circleci/project/env
+          source /home/circleci/project/env
+          set -eux -o pipefail
+          retry () {
+              $*  || (sleep 1 && $*) || (sleep 2 && $*) || (sleep 4 && $*) || (sleep 8 && $*)
+          }
+          retry pip install awscli==1.6
+          "/home/circleci/project/builder/cron/update_s3_htmls.sh"
+
+  # Update s3 htmls for the nightlies
+  update_s3_htmls_for_nightlies:
+    environment:
+      PIP_UPLOAD_FOLDER: "nightly/"
+    <<: *update_s3_htmls
+
+  # Update s3 htmls for the nightlies for devtoolset7
+  update_s3_htmls_for_nightlies_devtoolset7:
+    environment:
+      PIP_UPLOAD_FOLDER: "nightly/devtoolset7/"
+    <<: *update_s3_htmls
+
+
+  # upload_binary_logs job
+  # The builder hud at pytorch.org/builder shows the sizes of all the binaries
+  # over time. It gets this info from html files stored in S3, which this job
+  # populates every day.
+  upload_binary_sizes: &upload_binary_sizes
+    machine:
+      image: ubuntu-1604:201903-01
+    steps:
+    - attach_workspace:
+        at: ~/workspace
+    - run:
+        <<: *setup_linux_system_environment
+    - run:
+        <<: *binary_checkout
+    - run:
+        <<: *binary_install_miniconda
+    - run:
+        name: Upload binary sizes
+        no_output_timeout: "1h"
+        command: |
+          set +x
+          echo "declare -x \"AWS_ACCESS_KEY_ID=${PYTORCH_BINARY_AWS_ACCESS_KEY_ID}\"" > /home/circleci/project/env
+          echo "declare -x \"AWS_SECRET_ACCESS_KEY=${PYTORCH_BINARY_AWS_SECRET_ACCESS_KEY}\"" >> /home/circleci/project/env
+          export DATE="$(date -u +%Y_%m_%d)"
+          retry () {
+              $*  || (sleep 1 && $*) || (sleep 2 && $*) || (sleep 4 && $*) || (sleep 8 && $*)
+          }
+          source /home/circleci/project/env
+          set -eux -o pipefail
+
+          # This is hardcoded to match binary_install_miniconda.sh
+          export PATH="/home/circleci/project/miniconda/bin:$PATH"
+          # Not any awscli will work. Most won't. This one will work
+          retry conda create -qyn aws36 python=3.6
+          source activate aws36
+          pip install awscli==1.16.46
+
+          "/home/circleci/project/builder/cron/upload_binary_sizes.sh"
+
+##############################################################################
+# Binary build specs individual job specifications
+##############################################################################
   binary_linux_manywheel_2.7m_cpu_devtoolset7_build:
     environment:
       BUILD_ENVIRONMENT: "manywheel 2.7m cpu devtoolset7"
@@ -1379,6 +1747,725 @@ jobs:
     environment:
       BUILD_ENVIRONMENT: "libtorch 2.7 cpu"
     <<: *binary_mac_build
+
+##############################################################################
+# Binary build tests
+# These are the smoke tests run right after the build, before the upload.
+# If these fail, the upload doesn't happen.
+##############################################################################
+  binary_linux_manywheel_2.7m_cpu_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7m cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_2.7mu_cpu_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7mu cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_3.5m_cpu_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.5m cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_3.6m_cpu_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.6m cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_3.7m_cpu_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.7m cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_2.7m_cu92_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7m cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_2.7mu_cu92_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7mu cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_3.5m_cu92_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.5m cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_3.6m_cu92_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.6m cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_3.7m_cu92_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.7m cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_2.7m_cu100_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7m cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_2.7mu_cu100_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7mu cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_3.5m_cu100_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.5m cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_3.6m_cu100_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.6m cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_manywheel_3.7m_cu100_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.7m cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_conda_2.7_cpu_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+    <<: *binary_linux_test
+
+  binary_linux_conda_3.5_cpu_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+    <<: *binary_linux_test
+
+  binary_linux_conda_3.6_cpu_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+    <<: *binary_linux_test
+
+  binary_linux_conda_3.7_cpu_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+    <<: *binary_linux_test
+
+  binary_linux_conda_2.7_cu92_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_conda_3.5_cu92_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_conda_3.6_cu92_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_conda_3.7_cu92_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_conda_2.7_cu100_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_conda_3.5_cu100_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_conda_3.6_cu100_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+  binary_linux_conda_3.7_cu100_devtoolset7_test:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *binary_linux_test
+
+
+# There is currently no testing for libtorch TODO
+#  binary_linux_libtorch_2.7m_cpu_test:
+#    environment:
+#      BUILD_ENVIRONMENT: "libtorch 2.7m cpu"
+#    resource_class: gpu.medium
+#    <<: *binary_linux_test
+#
+#  binary_linux_libtorch_2.7m_cu90_test:
+#    environment:
+#      BUILD_ENVIRONMENT: "libtorch 2.7m cu90"
+#    resource_class: gpu.medium
+#    <<: *binary_linux_test
+#
+#  binary_linux_libtorch_2.7m_cu100_test:
+#    environment:
+#      BUILD_ENVIRONMENT: "libtorch 2.7m cu100"
+#    resource_class: gpu.medium
+#    <<: *binary_linux_test
+
+##############################################################################
+# Binary build uploads
+##############################################################################
+  binary_linux_manywheel_2.7m_cpu_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7m cpu devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_2.7mu_cpu_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7mu cpu devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_3.5m_cpu_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.5m cpu devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_3.6m_cpu_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.6m cpu devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_3.7m_cpu_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.7m cpu devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_2.7m_cu92_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7m cu92 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_2.7mu_cu92_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7mu cu92 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_3.5m_cu92_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.5m cu92 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_3.6m_cu92_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.6m cu92 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_3.7m_cu92_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.7m cu92 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_2.7m_cu100_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7m cu100 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_2.7mu_cu100_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7mu cu100 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_3.5m_cu100_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.5m cu100 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_3.6m_cu100_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.6m cu100 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_manywheel_3.7m_cu100_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.7m cu100 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_2.7_cpu_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cpu devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_3.5_cpu_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cpu devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_3.6_cpu_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cpu devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_3.7_cpu_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cpu devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_2.7_cu92_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cu92 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_3.5_cu92_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cu92 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_3.6_cu92_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cu92 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_3.7_cu92_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cu92 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_2.7_cu100_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cu100 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_3.5_cu100_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cu100 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_3.6_cu100_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cu100 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_conda_3.7_cu100_devtoolset7_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cu100 devtoolset7"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cpu_devtoolset7_shared-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu devtoolset7"
+      LIBTORCH_VARIANT: "shared-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cpu_devtoolset7_shared-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu devtoolset7"
+      LIBTORCH_VARIANT: "shared-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cpu_devtoolset7_static-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu devtoolset7"
+      LIBTORCH_VARIANT: "static-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cpu_devtoolset7_static-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cpu devtoolset7"
+      LIBTORCH_VARIANT: "static-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu92_devtoolset7_shared-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 devtoolset7"
+      LIBTORCH_VARIANT: "shared-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu92_devtoolset7_shared-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 devtoolset7"
+      LIBTORCH_VARIANT: "shared-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu92_devtoolset7_static-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 devtoolset7"
+      LIBTORCH_VARIANT: "static-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu92_devtoolset7_static-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu92 devtoolset7"
+      LIBTORCH_VARIANT: "static-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu100_devtoolset7_shared-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 devtoolset7"
+      LIBTORCH_VARIANT: "shared-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu100_devtoolset7_shared-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 devtoolset7"
+      LIBTORCH_VARIANT: "shared-without-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu100_devtoolset7_static-with-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 devtoolset7"
+      LIBTORCH_VARIANT: "static-with-deps"
+    <<: *binary_linux_upload
+
+  binary_linux_libtorch_2.7m_cu100_devtoolset7_static-without-deps_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7m cu100 devtoolset7"
+      LIBTORCH_VARIANT: "static-without-deps"
+    <<: *binary_linux_upload
+
+  binary_macos_wheel_2.7_cpu_upload:
+    environment:
+      BUILD_ENVIRONMENT: "wheel 2.7 cpu"
+    <<: *binary_mac_upload
+
+  binary_macos_wheel_3.5_cpu_upload:
+    environment:
+      BUILD_ENVIRONMENT: "wheel 3.5 cpu"
+    <<: *binary_mac_upload
+
+  binary_macos_wheel_3.6_cpu_upload:
+    environment:
+      BUILD_ENVIRONMENT: "wheel 3.6 cpu"
+    <<: *binary_mac_upload
+
+  binary_macos_wheel_3.7_cpu_upload:
+    environment:
+      BUILD_ENVIRONMENT: "wheel 3.7 cpu"
+    <<: *binary_mac_upload
+
+  binary_macos_conda_2.7_cpu_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cpu"
+    <<: *binary_mac_upload
+
+  binary_macos_conda_3.5_cpu_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cpu"
+    <<: *binary_mac_upload
+
+  binary_macos_conda_3.6_cpu_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cpu"
+    <<: *binary_mac_upload
+
+  binary_macos_conda_3.7_cpu_upload:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cpu"
+    <<: *binary_mac_upload
+
+  binary_macos_libtorch_2.7_cpu_upload:
+    environment:
+      BUILD_ENVIRONMENT: "libtorch 2.7 cpu"
+    <<: *binary_mac_upload
+
+##############################################################################
+# Smoke test specs individual job specifications
+##############################################################################
+  smoke_linux_manywheel_2.7m_cpu_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7m cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_2.7mu_cpu_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7mu cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_3.5m_cpu_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.5m cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_3.6m_cpu_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.6m cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_3.7m_cpu_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.7m cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_2.7m_cu92_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7m cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_2.7mu_cu92_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7mu cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_3.5m_cu92_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.5m cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_3.6m_cu92_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.6m cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_3.7m_cu92_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.7m cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda92"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_2.7m_cu100_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7m cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_2.7mu_cu100_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 2.7mu cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_3.5m_cu100_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.5m cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_3.6m_cu100_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.6m cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_manywheel_3.7m_cu100_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "manywheel 3.7m cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/manylinux-cuda100"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_2.7_cpu_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_3.5_cpu_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_3.6_cpu_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_3.7_cpu_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cpu devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_2.7_cu92_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_3.5_cu92_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_3.6_cu92_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_3.7_cu92_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cu92 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_2.7_cu100_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_3.5_cu100_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_3.6_cu100_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_linux_conda_3.7_cu100_devtoolset7:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cu100 devtoolset7"
+      DOCKER_IMAGE: "soumith/conda-cuda"
+      USE_CUDA_DOCKER_RUNTIME: "1"
+    resource_class: gpu.medium
+    <<: *smoke_linux_test
+
+  smoke_macos_wheel_2.7_cpu:
+    environment:
+      BUILD_ENVIRONMENT: "wheel 2.7 cpu"
+    <<: *smoke_mac_test
+
+  smoke_macos_wheel_3.5_cpu:
+    environment:
+      BUILD_ENVIRONMENT: "wheel 3.5 cpu"
+    <<: *smoke_mac_test
+
+  smoke_macos_wheel_3.6_cpu:
+    environment:
+      BUILD_ENVIRONMENT: "wheel 3.6 cpu"
+    <<: *smoke_mac_test
+
+  smoke_macos_wheel_3.7_cpu:
+    environment:
+      BUILD_ENVIRONMENT: "wheel 3.7 cpu"
+    <<: *smoke_mac_test
+
+  smoke_macos_conda_2.7_cpu:
+    environment:
+      BUILD_ENVIRONMENT: "conda 2.7 cpu"
+    <<: *smoke_mac_test
+
+  smoke_macos_conda_3.5_cpu:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.5 cpu"
+    <<: *smoke_mac_test
+
+  smoke_macos_conda_3.6_cpu:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.6 cpu"
+    <<: *smoke_mac_test
+
+  smoke_macos_conda_3.7_cpu:
+    environment:
+      BUILD_ENVIRONMENT: "conda 3.7 cpu"
+    <<: *smoke_mac_test
 
 
 ##############################################################################
