@@ -75,6 +75,11 @@ class Header(object):
 YAML_SOURCES = [
     File("header-section.yml"),
     File("linux-build-defaults.yml"),
+    File("macos-build-defaults.yml"),
+    File("nightly-binary-build-defaults.yml"),
+    File("linux-binary-build-defaults.yml"),
+    File("macos-binary-build-defaults.yml"),
+    File("nightly-build-smoke-tests-defaults.yml"),
     Header("Job specifications job specs"),
     Treegen(pytorch_build_definitions.add_build_env_defs, 0),
     File("job-specs-setup.yml"),
