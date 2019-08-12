@@ -101,6 +101,7 @@ YAML_SOURCES = [
     Header("Smoke test specs individual job specifications"),
     Treegen(binary_build_definitions.add_smoke_test_specs, 1),
     File("workflows.yml"),
+    Listgen(pytorch_build_definitions.get_workflow_list, 3),
     Listgen(caffe2_build_definitions.get_caffe2_workflows, 3),
 ]
 
